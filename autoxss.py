@@ -18,7 +18,7 @@ warnings.filterwarnings("ignore")
 TOOL_NAME = "AutoXSS-Prime"
 VERSION = "1.0"
 CREATOR = "Rahul A.K.A SecurityBong"
-DESC = "Accurate Payload Reporting + Full Production Suite."
+DESC = "The ultimate automated XSS vulnerability scanner"
 
 # --- CONFIGURATION ---
 HOME = os.path.expanduser("~")
