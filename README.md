@@ -15,8 +15,7 @@ Dalfox Scan: Fuzzes every live parameter for XSS.
 Report: Saves all findings in the results/ folder.
 
 
-📂 Project Structure
-After running, the tool creates a workspace:
+📂 After running, the tool creates a workspace.
 
 ⚠️ Disclaimer
 This tool is for educational purposes and authorized testing only.
