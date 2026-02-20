@@ -8,16 +8,11 @@ Simply run the script and enter your target domain.
 What happens next?
 
 Recon: Gathers URLs from Wayback Machine and Active Crawling.
-
 Filter: Removes static files (.jpg, .css) and keeps only parameterized URLs.
-
 Live Check: Verifies which URLs are actually alive (200, 403, 500).
-
 Nuclei Scan: Checks for server misconfigs and low-hanging CVEs.
-
 Dalfox Scan: Fuzzes every live parameter for XSS.
-
-Report: Saves all findings in the results/ folder.
+Report: Saves all findings in the results/folder.
 
 
 📂 After running, the tool creates a workspace.
