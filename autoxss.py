@@ -92,7 +92,6 @@ def run_cmd_spinner(cmd, task_name, timeout=3600):
 
 # --- WORKSPACE WIPER ---
 def clean_workspace():
-    """Wipes old results to prevent cross-contamination between targets."""
     if not os.path.exists(RESULTS_DIR):
         return
         
@@ -174,17 +173,22 @@ def setup():
 
 # --- EXECUTION PHASE ---
 
-def run_pipeline(domain):
+def run_pipeline(target_input):
     clean_workspace()
     
-    log(f"Starting Recon on: {domain}", "INFO")
+    # --- FIX: INTELLIGENT PROTOCOL HANDLING ---
+    target_input = target_input.strip()
     
-    if domain.startswith("http"):
-        domain_clean = domain.split("//")[1].split("/")[0]
-        domain_full = domain
+    if target_input.startswith("http"):
+        domain_full = target_input
+        # Extract just the domain for GAU
+        domain_clean = target_input.split("//")[1].split("/")[0]
     else:
-        domain_clean = domain.split("/")[0]
-        domain_full = f"http://{domain}"
+        # Default to HTTPS instead of HTTP
+        domain_full = f"https://{target_input}"
+        domain_clean = target_input.split("/")[0]
+        
+    log(f"Starting Recon on: {domain_full}", "INFO")
         
     raw_path = os.path.join(RESULTS_DIR, "raw_urls.txt")
     live_path = os.path.join(RESULTS_DIR, "live_targets.txt")
@@ -192,12 +196,11 @@ def run_pipeline(domain):
     gau_bin = resolve_binary_path("gau") or "gau"
     katana_bin = resolve_binary_path("katana") or "katana"
     
-    # 1. RECON 
+    # 1. RECON (Added -ps to Katana for passive sourcing)
     run_cmd_spinner(f"{gau_bin} {domain_clean} --threads 10 >> {raw_path} 2>&1", "GAU (Fetching historical URLs)")
-    run_cmd_spinner(f"{katana_bin} -u {domain_full} -d 3 -jc -silent >> {raw_path}", "Katana (Crawling active links)")
+    run_cmd_spinner(f"{katana_bin} -u {domain_full} -d 3 -jc -ps -silent >> {raw_path}", "Katana (Crawling active links & passive sources)")
     
-    # Force defaults for demo testfire
-    if "testfire" in domain:
+    if "testfire" in domain_clean:
         with open(raw_path, "a", encoding="utf-8") as f:
             f.write(f"\nhttp://{domain_clean}/search.jsp?query=test\n")
             f.write(f"http://{domain_clean}/login.jsp\n")
@@ -230,15 +233,14 @@ def run_pipeline(domain):
 
     VULN_COUNT = 0
 
-    # 4. NUCLEI (DOMAIN LEVEL - ALWAYS RUNS)
+    # 4. NUCLEI (DOMAIN LEVEL)
     nuclei_bin = resolve_binary_path("nuclei")
     if nuclei_bin:
         log("Phase 1: Nuclei Domain-Level & Tech Scan", "INFO")
         nuclei_out_a = os.path.join(RESULTS_DIR, "nuclei_general.json")
-        cmd_a = f"{nuclei_bin} -u {domain_full} -tags cve,misconfig,exposure,vulnerability,tech,recon -json -o {nuclei_out_a}"
-        run_cmd_spinner(cmd_a, "Nuclei (Fingerprinting tech & hunting CVEs)")
+        cmd_a = f"{nuclei_bin} -u {domain_full} -json -o {nuclei_out_a}"
+        run_cmd_spinner(cmd_a, "Nuclei (Scanning all default templates)")
         
-        # Parse Mode A immediately
         if os.path.exists(nuclei_out_a):
             try:
                 with open(nuclei_out_a, "r", encoding="utf-8") as f:
@@ -259,7 +261,7 @@ def run_pipeline(domain):
                         VULN_COUNT += 1
             except: pass
 
-        # NUCLEI DAST - ONLY RUNS IF WE HAVE URLS
+        # NUCLEI DAST
         if len(alive_urls) > 0:
             log("Phase 2: Nuclei Parameter-Level Scan", "INFO")
             nuclei_out_b = os.path.join(RESULTS_DIR, "nuclei_dast.json")
@@ -291,7 +293,7 @@ def run_pipeline(domain):
                                 VULN_COUNT += 1
                 except: pass
 
-    # 5. JAELES - ONLY RUNS IF WE HAVE URLS
+    # 5. JAELES
     jaeles_exec = resolve_binary_path("jaeles")
     if jaeles_exec and os.path.exists(JAELES_SIG_PATH) and len(alive_urls) > 0:
         log("Phase 3: Jaeles Signature Scan", "INFO")
@@ -309,7 +311,7 @@ def run_pipeline(domain):
                             print(f"       {headline}")
                         VULN_COUNT += 1
 
-    # 6. DALFOX - ONLY RUNS IF WE HAVE URLS
+    # 6. DALFOX
     dalfox_bin = resolve_binary_path("dalfox")
     if dalfox_bin and len(alive_urls) > 0:
         log("Phase 4: Dalfox Mass XSS Testing", "INFO")
@@ -344,18 +346,13 @@ def run_pipeline(domain):
 
 if __name__ == "__main__":
     print_banner()
-    
     setup()
     
     if len(sys.argv) > 1: target = sys.argv[1]
-    else: target = input("\n\033[94m[?] Target Domain (e.g., example.com): \033[0m")
-    
-    def clean_input(u):
-        u = u.strip().replace("http://", "").replace("https://", "")
-        if "/" in u: u = u.split("/")[0]
-        return u
+    else: target = input("\n\033[94m[?] Target Domain (e.g., https://example.com): \033[0m")
 
     try:
-        run_pipeline(clean_input(target))
+        # We now pass the EXACT input you typed, no stripping beforehand!
+        run_pipeline(target)
     except KeyboardInterrupt:
         print("\n[!] Scan interrupted by user. Exiting...")
