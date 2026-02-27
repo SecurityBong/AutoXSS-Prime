@@ -172,21 +172,21 @@ def run_pipeline(domain):
     raw_path = os.path.join(RESULTS_DIR, "raw_urls.txt")
     live_path = os.path.join(RESULTS_DIR, "live_targets.txt")
     
-    # Resolving absolute paths for Recon tools (THE BUG FIX)
+    # Resolving absolute paths for Recon tools
     gau_bin = resolve_binary_path("gau") or "gau"
     katana_bin = resolve_binary_path("katana") or "katana"
     
-    # 1. RECON (Now using full paths)
+    # 1. RECON 
     run_cmd_spinner(f"{gau_bin} {domain_clean} --threads 10 >> {raw_path} 2>&1", "GAU (Fetching historical URLs)")
     run_cmd_spinner(f"{katana_bin} -u {domain_full} -d 3 -jc -silent >> {raw_path}", "Katana (Crawling active links)")
     
-    # 2. FILTERING (TAKE ALL PARAMETERS)
+    # 2. FILTERING 
     found_urls = []
     if os.path.exists(raw_path):
         with open(raw_path, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
                 url = line.strip()
-                if "?" in url: # Taking ALL URLs with parameters
+                if "?" in url: 
                     found_urls.append(url)
     
     unique_urls = list(set(found_urls))
@@ -209,13 +209,14 @@ def run_pipeline(domain):
 
     VULN_COUNT = 0
 
-    # 4. NUCLEI (UNSUPPRESSED)
+    # 4. NUCLEI (TECH DETECT & UNSUPPRESSED)
     nuclei_bin = resolve_binary_path("nuclei")
     if nuclei_bin:
-        log("Phase 1: Nuclei Domain-Level Scan", "INFO")
+        log("Phase 1: Nuclei Domain-Level & Tech Scan", "INFO")
         nuclei_out_a = os.path.join(RESULTS_DIR, "nuclei_general.json")
-        cmd_a = f"{nuclei_bin} -u {domain_full} -tags cve,misconfig,exposure,vulnerability -json -o {nuclei_out_a}"
-        run_cmd_spinner(cmd_a, "Nuclei (Hunting misconfigs & CVEs)")
+        # ADDED 'tech' and 'recon' to the tags to fingerprint the stack
+        cmd_a = f"{nuclei_bin} -u {domain_full} -tags cve,misconfig,exposure,vulnerability,tech,recon -json -o {nuclei_out_a}"
+        run_cmd_spinner(cmd_a, "Nuclei (Fingerprinting tech & hunting CVEs)")
         
         log("Phase 2: Nuclei Parameter-Level Scan", "INFO")
         nuclei_out_b = os.path.join(RESULTS_DIR, "nuclei_dast.json")
@@ -236,7 +237,7 @@ def run_pipeline(domain):
                                 print(f"\n\033[91m[VULN] Nuclei XSS ({severity}): {name}\033[0m")
                                 print(f"       URL: {matched}")
                             else:
-                                color = "\033[96m" 
+                                color = "\033[96m" # Cyan defaults for INFO
                                 if severity == "CRITICAL": color = "\033[91m"
                                 elif severity == "HIGH": color = "\033[93m"
                                 elif severity == "MEDIUM": color = "\033[95m"
@@ -293,7 +294,7 @@ def run_pipeline(domain):
 
     print("\n" + "="*70)
     if VULN_COUNT > 0:
-        log(f"Scan Complete. Found {VULN_COUNT} issues.", "SUCCESS")
+        log(f"Scan Complete. Found {VULN_COUNT} issues/intel points.", "SUCCESS")
         log(f"Full reports saved in: {RESULTS_DIR}", "INFO")
     else:
         log("Scan Complete. No vulnerabilities found on target surface.", "INFO")
@@ -301,10 +302,8 @@ def run_pipeline(domain):
 if __name__ == "__main__":
     print_banner()
     
-    # PRE-FLIGHT COMES FIRST
     setup()
     
-    # GET TARGET SECOND
     if len(sys.argv) > 1: target = sys.argv[1]
     else: target = input("\n\033[94m[?] Target Domain (e.g., example.com): \033[0m")
     
