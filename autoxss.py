@@ -5,7 +5,6 @@ import shutil
 import time
 import threading
 import json
-import concurrent.futures
 
 # --- BRANDING ---
 TOOL_NAME = "AutoXSS Prime"
@@ -171,20 +170,52 @@ def setup():
 
     print("\033[1m--- [ READY ] ---\033[0m\n")
 
+# --- PARSING ENGINE ---
+def parse_nuclei_results(filepath):
+    """Safely extracts Nuclei findings whether it wrote JSON or Plain Text."""
+    count = 0
+    if os.path.exists(filepath):
+        with open(filepath, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line: continue
+                
+                try:
+                    data = json.loads(line)
+                    name = data.get('info', {}).get('name', 'Unknown')
+                    severity = data.get('info', {}).get('severity', 'info').upper()
+                    matched = data.get('matched-at', 'Unknown URL')
+                    
+                    if "xss" in name.lower() or "cross-site" in name.lower():
+                        print(f"\n\033[91m[VULN] Nuclei XSS ({severity}): {name}\033[0m")
+                        print(f"       URL: {matched}")
+                    else:
+                        color = "\033[96m" 
+                        if severity == "CRITICAL": color = "\033[91m"
+                        elif severity == "HIGH": color = "\033[93m"
+                        elif severity == "MEDIUM": color = "\033[95m"
+                        elif severity == "LOW": color = "\033[94m"
+
+                        print(f"\n{color}[BONUS] Nuclei ({severity}): {name}\033[0m")
+                        print(f"       URL: {matched}")
+                    count += 1
+                except Exception:
+                    # THE FIX: If Nuclei wrote plain text, print it natively!
+                    print(f"\n\033[96m[BONUS] Nuclei: {line}\033[0m")
+                    count += 1
+    return count
+
 # --- EXECUTION PHASE ---
 
 def run_pipeline(target_input):
     clean_workspace()
     
-    # --- FIX: INTELLIGENT PROTOCOL HANDLING ---
     target_input = target_input.strip()
     
     if target_input.startswith("http"):
         domain_full = target_input
-        # Extract just the domain for GAU
         domain_clean = target_input.split("//")[1].split("/")[0]
     else:
-        # Default to HTTPS instead of HTTP
         domain_full = f"https://{target_input}"
         domain_clean = target_input.split("/")[0]
         
@@ -196,7 +227,7 @@ def run_pipeline(target_input):
     gau_bin = resolve_binary_path("gau") or "gau"
     katana_bin = resolve_binary_path("katana") or "katana"
     
-    # 1. RECON (Added -ps to Katana for passive sourcing)
+    # 1. RECON
     run_cmd_spinner(f"{gau_bin} {domain_clean} --threads 10 >> {raw_path} 2>&1", "GAU (Fetching historical URLs)")
     run_cmd_spinner(f"{katana_bin} -u {domain_full} -d 3 -jc -ps -silent >> {raw_path}", "Katana (Crawling active links & passive sources)")
     
@@ -238,60 +269,21 @@ def run_pipeline(target_input):
     if nuclei_bin:
         log("Phase 1: Nuclei Domain-Level & Tech Scan", "INFO")
         nuclei_out_a = os.path.join(RESULTS_DIR, "nuclei_general.json")
-        cmd_a = f"{nuclei_bin} -u {domain_full} -json -o {nuclei_out_a}"
+        
+        # FIX: Added '-j' to strongly force JSON Lines format
+        cmd_a = f"{nuclei_bin} -u {domain_full} -j -o {nuclei_out_a}"
         run_cmd_spinner(cmd_a, "Nuclei (Scanning all default templates)")
         
-        if os.path.exists(nuclei_out_a):
-            try:
-                with open(nuclei_out_a, "r", encoding="utf-8") as f:
-                    for line in f:
-                        data = json.loads(line)
-                        name = data.get('info', {}).get('name', 'Unknown')
-                        severity = data.get('info', {}).get('severity', 'info').upper()
-                        matched = data.get('matched-at', 'Unknown URL')
-                        
-                        color = "\033[96m" 
-                        if severity == "CRITICAL": color = "\033[91m"
-                        elif severity == "HIGH": color = "\033[93m"
-                        elif severity == "MEDIUM": color = "\033[95m"
-                        elif severity == "LOW": color = "\033[94m"
-
-                        print(f"\n{color}[BONUS] Nuclei ({severity}): {name}\033[0m")
-                        print(f"       URL: {matched}")
-                        VULN_COUNT += 1
-            except: pass
+        VULN_COUNT += parse_nuclei_results(nuclei_out_a)
 
         # NUCLEI DAST
         if len(alive_urls) > 0:
             log("Phase 2: Nuclei Parameter-Level Scan", "INFO")
             nuclei_out_b = os.path.join(RESULTS_DIR, "nuclei_dast.json")
-            cmd_b = f"{nuclei_bin} -l {live_path} -tags dast,xss,sqli,lfi,injection -json -o {nuclei_out_b}"
+            cmd_b = f"{nuclei_bin} -l {live_path} -tags dast,xss,sqli,lfi,injection -j -o {nuclei_out_b}"
             run_cmd_spinner(cmd_b, "Nuclei (Fuzzing parameters for SQLi/LFI/XSS)")
 
-            if os.path.exists(nuclei_out_b):
-                try:
-                    with open(nuclei_out_b, "r", encoding="utf-8") as f:
-                        for line in f:
-                            data = json.loads(line)
-                            name = data.get('info', {}).get('name', 'Unknown')
-                            severity = data.get('info', {}).get('severity', 'info').upper()
-                            matched = data.get('matched-at', 'Unknown URL')
-                            
-                            if "xss" in name.lower() or "cross-site" in name.lower():
-                                print(f"\n\033[91m[VULN] Nuclei XSS ({severity}): {name}\033[0m")
-                                print(f"       URL: {matched}")
-                                VULN_COUNT += 1
-                            else:
-                                color = "\033[96m" 
-                                if severity == "CRITICAL": color = "\033[91m"
-                                elif severity == "HIGH": color = "\033[93m"
-                                elif severity == "MEDIUM": color = "\033[95m"
-                                elif severity == "LOW": color = "\033[94m"
-
-                                print(f"\n{color}[BONUS] Nuclei ({severity}): {name}\033[0m")
-                                print(f"       URL: {matched}")
-                                VULN_COUNT += 1
-                except: pass
+            VULN_COUNT += parse_nuclei_results(nuclei_out_b)
 
     # 5. JAELES
     jaeles_exec = resolve_binary_path("jaeles")
@@ -352,7 +344,6 @@ if __name__ == "__main__":
     else: target = input("\n\033[94m[?] Target Domain (e.g., https://example.com): \033[0m")
 
     try:
-        # We now pass the EXACT input you typed, no stripping beforehand!
         run_pipeline(target)
     except KeyboardInterrupt:
         print("\n[!] Scan interrupted by user. Exiting...")
