@@ -172,7 +172,7 @@ def setup():
 
 # --- PARSING ENGINE ---
 def parse_nuclei_results(filepath):
-    """Safely extracts Nuclei findings whether it wrote JSON or Plain Text."""
+    """Safely extracts Nuclei findings, including extracted details."""
     count = 0
     if os.path.exists(filepath):
         with open(filepath, "r", encoding="utf-8") as f:
@@ -186,9 +186,19 @@ def parse_nuclei_results(filepath):
                     severity = data.get('info', {}).get('severity', 'info').upper()
                     matched = data.get('matched-at', 'Unknown URL')
                     
+                    # NEW: Pull out the specific details (TLS version, extracted strings, etc.)
+                    extracted = data.get('extracted-results', [])
+                    matcher_name = data.get('matcher-name', '')
+                    
+                    details = ""
+                    if extracted:
+                        details = f"\n       \033[97mDetails: {', '.join(extracted)}\033[0m"
+                    elif matcher_name:
+                        details = f"\n       \033[97mDetails: {matcher_name}\033[0m"
+                    
                     if "xss" in name.lower() or "cross-site" in name.lower():
                         print(f"\n\033[91m[VULN] Nuclei XSS ({severity}): {name}\033[0m")
-                        print(f"       URL: {matched}")
+                        print(f"       URL: {matched}{details}")
                     else:
                         color = "\033[96m" 
                         if severity == "CRITICAL": color = "\033[91m"
@@ -197,10 +207,10 @@ def parse_nuclei_results(filepath):
                         elif severity == "LOW": color = "\033[94m"
 
                         print(f"\n{color}[BONUS] Nuclei ({severity}): {name}\033[0m")
-                        print(f"       URL: {matched}")
+                        print(f"       URL: {matched}{details}")
                     count += 1
                 except Exception:
-                    # THE FIX: If Nuclei wrote plain text, print it natively!
+                    # Fallback if Nuclei wrote plain text
                     print(f"\n\033[96m[BONUS] Nuclei: {line}\033[0m")
                     count += 1
     return count
@@ -270,7 +280,6 @@ def run_pipeline(target_input):
         log("Phase 1: Nuclei Domain-Level & Tech Scan", "INFO")
         nuclei_out_a = os.path.join(RESULTS_DIR, "nuclei_general.json")
         
-        # FIX: Added '-j' to strongly force JSON Lines format
         cmd_a = f"{nuclei_bin} -u {domain_full} -j -o {nuclei_out_a}"
         run_cmd_spinner(cmd_a, "Nuclei (Scanning all default templates)")
         
