@@ -12,7 +12,7 @@ import ssl
 
 # --- BRANDING ---
 TOOL_NAME = "AutoXSS Prime"
-VERSION = "1.1 (Unsuppressed Nuclei)"
+VERSION = "1.0"
 CREATOR = "Rahul A.K.A SecurityBong"
 DESC = "Automated Unauthenticated XSS & Vulnerability Scanner."
 
