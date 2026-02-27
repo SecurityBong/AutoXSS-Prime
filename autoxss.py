@@ -3,28 +3,23 @@ import os
 import sys
 import shutil
 import time
-import venv
 import threading
 import json
 import concurrent.futures
-import requests
-import warnings
-import re # Added for robust parsing
-
-# Disable SSL warnings
-warnings.filterwarnings("ignore")
+import urllib.request
+import urllib.error
+import ssl
 
 # --- BRANDING ---
-TOOL_NAME = "AutoXSS-Prime"
-VERSION = "1.0"
+TOOL_NAME = "AutoXSS Prime"
+VERSION = "1.1 (Unsuppressed Nuclei)"
 CREATOR = "Rahul A.K.A SecurityBong"
-DESC = "The ultimate automated XSS vulnerability scanner"
+DESC = "Automated Unauthenticated XSS & Vulnerability Scanner."
 
 # --- CONFIGURATION ---
 HOME = os.path.expanduser("~")
 WORKSPACE_DIR = os.path.abspath("AutoXSS_Workspace")
 TOOLS_DIR = os.path.join(WORKSPACE_DIR, "tools")
-VENV_DIR = os.path.join(TOOLS_DIR, "venv")
 RESULTS_DIR = os.path.join(WORKSPACE_DIR, "results")
 
 # REPOS
@@ -34,14 +29,6 @@ JAELES_SIG_REPO = "https://github.com/jaeles-project/jaeles-signatures.git"
 # PATHS
 JAELES_PATH = os.path.join(TOOLS_DIR, "jaeles")
 JAELES_SIG_PATH = os.path.join(TOOLS_DIR, "jaeles-signatures")
-
-# VENV
-if sys.platform == "win32":
-    VENV_PYTHON = os.path.join(VENV_DIR, "Scripts", "python.exe")
-    VENV_PIP = os.path.join(VENV_DIR, "Scripts", "pip.exe")
-else:
-    VENV_PYTHON = os.path.join(VENV_DIR, "bin", "python3")
-    VENV_PIP = os.path.join(VENV_DIR, "bin", "pip")
 
 # LIMITS
 MAX_URLS_SCAN = 10000  
@@ -107,7 +94,7 @@ def run_cmd_spinner(cmd, task_name, timeout=3600):
 
 # --- SORTING LOGIC ---
 def prioritize_urls(urls):
-    juicy_params = ["id=", "cat=", "artist=", "search=", "query=", "file=", "u=", "page="]
+    juicy_params = ["id=", "cat=", "artist=", "search=", "query=", "file=", "u=", "page=", "url=", "redirect=", "next=", "q=", "link="]
     high_priority = []
     low_priority = []
     
@@ -124,31 +111,33 @@ def prioritize_urls(urls):
     log(f"Sorting: {len(high_priority)} High Priority / {len(low_priority)} Standard URLs.", "INFO")
     return high_priority + low_priority
 
-# --- LIVE CHECKER ---
+# --- LIVE CHECKER (HTTPX INTEGRATION) ---
 def check_alive(urls):
-    log(f"Checking {len(urls)} URLs for liveness...", "INFO")
+    log(f"Checking {len(urls)} URLs for liveness using httpx...", "INFO")
     alive_urls = []
     
-    def check(url):
-        try:
-            r = requests.head(url, timeout=5, verify=False)
-            return url
-        except: 
-            return None
+    httpx_bin = resolve_binary_path("httpx")
+    if not httpx_bin:
+        log("httpx not found! Falling back to testing all URLs.", "WARN")
+        return urls
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-        futures = {executor.submit(check, u): u for u in urls}
-        completed = 0
-        total = len(urls)
-        for future in concurrent.futures.as_completed(futures):
-            completed += 1
-            if completed % 100 == 0:
-                sys.stdout.write(f"\r    -> Progress: {completed}/{total}")
-                sys.stdout.flush()
-            if future.result():
-                alive_urls.append(future.result())
+    temp_in = os.path.join(RESULTS_DIR, "temp_to_check.txt")
+    temp_out = os.path.join(RESULTS_DIR, "temp_alive.txt")
     
-    sys.stdout.write("\r" + " "*60 + "\r") 
+    with open(temp_in, "w", encoding="utf-8") as f:
+        f.write("\n".join(urls))
+        
+    cmd = f"{httpx_bin} -l {temp_in} -fc 404 -silent -t 50 -o {temp_out}"
+    run_cmd_spinner(cmd, "httpx Liveness Check")
+    
+    if os.path.exists(temp_out):
+        with open(temp_out, "r", encoding="utf-8") as f:
+            alive_urls = [line.strip() for line in f if line.strip()]
+        os.remove(temp_out)
+        
+    if os.path.exists(temp_in):
+        os.remove(temp_in)
+        
     return alive_urls
 
 # --- SETUP ---
@@ -159,12 +148,12 @@ def setup():
     for d in [WORKSPACE_DIR, TOOLS_DIR, RESULTS_DIR]:
         if not os.path.exists(d): os.makedirs(d)
 
-    # 1. Tools
     tools = {
         "gau": "github.com/lc/gau/v2/cmd/gau@latest",
         "katana": "github.com/projectdiscovery/katana/cmd/katana@latest",
         "dalfox": "github.com/hahwul/dalfox/v2@latest",
-        "nuclei": "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"
+        "nuclei": "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
+        "httpx": "github.com/projectdiscovery/httpx/cmd/httpx@latest"
     }
     
     for name, path in tools.items():
@@ -174,7 +163,6 @@ def setup():
             log(f"Installing '{name}'...", "SETUP")
             run_cmd_spinner(f"go install {path}", f"Installing {name}")
 
-    # 2. Jaeles
     if resolve_binary_path("jaeles"):
          log("Tool 'jaeles' Found.", "SUCCESS")
     else:
@@ -211,53 +199,63 @@ def run_pipeline(domain):
     # 2. SORTING & FILTERING
     found_urls = []
     if os.path.exists(raw_path):
-        with open(raw_path, "r", errors="ignore") as f:
+        with open(raw_path, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
                 url = line.strip()
-                if "?" in url and "=" in url:
+                if "?" in url: 
                     found_urls.append(url)
     
     unique_urls = list(set(found_urls))
     sorted_urls = prioritize_urls(unique_urls)
     
-    # Live Check
+    # Live Check with HTTPX
     alive_urls = check_alive(sorted_urls)
     alive_urls = alive_urls[:MAX_URLS_SCAN]
     
-    with open(live_path, "w") as f:
+    with open(live_path, "w", encoding="utf-8") as f:
         f.write("\n".join(alive_urls))
         
     log(f"Scan Ready: {len(alive_urls)} URLs (Top Priority First).", "SUCCESS")
     
     VULN_COUNT = 0
 
-    # 3. NUCLEI (DUAL MODE)
+    # 3. NUCLEI (UNSUPPRESSED MODE)
     nuclei_bin = resolve_binary_path("nuclei")
     if nuclei_bin:
         log("Running Nuclei Mode A (General Misconfig/CVEs)...", "INFO")
         nuclei_out_a = os.path.join(RESULTS_DIR, "nuclei_general.json")
-        cmd_a = f"{nuclei_bin} -u {domain_full} -tags cve,misconfig,exposure,vulnerability -severity medium,high,critical -json -o {nuclei_out_a}"
+        # Removed severity filters so nothing is suppressed
+        cmd_a = f"{nuclei_bin} -u {domain_full} -tags cve,misconfig,exposure,vulnerability -json -o {nuclei_out_a}"
         run_cmd_spinner(cmd_a, "Nuclei General Scan")
         
         log("Running Nuclei Mode B (DAST/XSS/SQLi on URLs)...", "INFO")
         nuclei_out_b = os.path.join(RESULTS_DIR, "nuclei_dast.json")
-        cmd_b = f"{nuclei_bin} -l {live_path} -tags dast,xss,sqli,lfi,injection -severity low,medium,high,critical -json -o {nuclei_out_b}"
+        # Removed severity filters here as well
+        cmd_b = f"{nuclei_bin} -l {live_path} -tags dast,xss,sqli,lfi,injection -json -o {nuclei_out_b}"
         run_cmd_spinner(cmd_b, "Nuclei DAST Scan")
 
         for out_file in [nuclei_out_a, nuclei_out_b]:
             if os.path.exists(out_file):
                 try:
-                    with open(out_file, "r") as f:
+                    with open(out_file, "r", encoding="utf-8") as f:
                         for line in f:
                             data = json.loads(line)
-                            name = data.get('info', {}).get('name')
-                            matched = data.get('matched-at')
+                            name = data.get('info', {}).get('name', 'Unknown')
+                            severity = data.get('info', {}).get('severity', 'info').upper()
+                            matched = data.get('matched-at', 'Unknown URL')
                             
-                            if "xss" in name.lower():
-                                print(f"\n\033[91m[VULN] Nuclei XSS: {name}\033[0m")
+                            if "xss" in name.lower() or "cross-site" in name.lower():
+                                print(f"\n\033[91m[VULN] Nuclei XSS ({severity}): {name}\033[0m")
                                 print(f"       URL: {matched}")
                             else:
-                                print(f"\n\033[96m[BONUS] Nuclei: {name}\033[0m")
+                                # Dynamic Color Coding based on Severity
+                                color = "\033[96m" # Cyan (Info)
+                                if severity == "CRITICAL": color = "\033[91m" # Red
+                                elif severity == "HIGH": color = "\033[93m" # Yellow
+                                elif severity == "MEDIUM": color = "\033[95m" # Purple
+                                elif severity == "LOW": color = "\033[94m" # Blue
+
+                                print(f"\n{color}[BONUS] Nuclei ({severity}): {name}\033[0m")
                                 print(f"       URL: {matched}")
                             VULN_COUNT += 1
                 except: pass
@@ -274,31 +272,29 @@ def run_pipeline(domain):
             for root, dirs, files in os.walk(jaeles_out_dir):
                 for file in files:
                     if file.endswith(".txt"):
-                        with open(os.path.join(root, file), 'r') as f:
+                        with open(os.path.join(root, file), 'r', encoding="utf-8", errors="ignore") as f:
                             headline = f.readline().strip()
                             print(f"\n\033[96m[BONUS] Jaeles Finding ({file}):\033[0m")
                             print(f"       {headline}")
                         VULN_COUNT += 1
 
-    # 5. DALFOX (REGEX PARSER)
+    # 5. DALFOX (UNCENSORED PARSER)
     dalfox_bin = resolve_binary_path("dalfox")
-    if dalfox_bin:
+    if dalfox_bin and len(alive_urls) > 0:
         log(f"Dalfox Scanning {len(alive_urls)} URLs (Uncensored)...", "INFO")
         dalfox_out = os.path.join(RESULTS_DIR, "dalfox.txt")
         cmd = f"{dalfox_bin} file {live_path} --skip-mining-all --format plain > {dalfox_out}"
         run_cmd_spinner(cmd, "Dalfox Scan")
         
         if os.path.exists(dalfox_out):
-            with open(dalfox_out, "r") as f:
+            with open(dalfox_out, "r", encoding="utf-8", errors="ignore") as f:
                 for line in f:
                     line = line.strip()
                     if "[POC]" in line:
-                        # Improved Regex to capture the full URL starting from http/https
-                        match = re.search(r'(https?://\S+)', line)
-                        if match:
-                            full_url = match.group(1)
+                        parts = line.split("http", 1)
+                        if len(parts) > 1:
+                            full_url = "http" + parts[1].strip()
                             
-                            # Determine Type for Color
                             if "[V]" in line or "inHTML" in line:
                                 print(f"\n\033[91m[VULN] Dalfox XSS Confirmed!\033[0m")
                                 print(f"       \033[93m{full_url}\033[0m")
