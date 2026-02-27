@@ -72,7 +72,6 @@ def run_cmd_spinner(cmd, task_name, timeout=3600):
         start_time = time.time()
         while not stop_spinner.is_set():
             elapsed = int(time.time() - start_time)
-            # Shows task name, spinner animation, and seconds elapsed
             sys.stdout.write(f"\r\033[93m[Wait]\033[0m {task_name}... {chars[i]} ({elapsed}s)")
             sys.stdout.flush()
             time.sleep(0.1)
@@ -84,7 +83,7 @@ def run_cmd_spinner(cmd, task_name, timeout=3600):
         subprocess.run(cmd, shell=True, check=True, timeout=timeout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         stop_spinner.set()
         t.join()
-        sys.stdout.write("\r" + " "*100 + "\r") # Clear line completely
+        sys.stdout.write("\r" + " "*100 + "\r") 
         return True
     except:
         stop_spinner.set()
@@ -108,7 +107,6 @@ def check_alive(urls):
     with open(temp_in, "w", encoding="utf-8") as f:
         f.write("\n".join(urls))
         
-    # HTTPX config: filter 404s, keep others, 50 threads
     cmd = f"{httpx_bin} -l {temp_in} -fc 404 -silent -t 50 -o {temp_out}"
     run_cmd_spinner(cmd, "HTTPX (Validating live endpoints)")
     
@@ -174,17 +172,14 @@ def run_pipeline(domain):
     raw_path = os.path.join(RESULTS_DIR, "raw_urls.txt")
     live_path = os.path.join(RESULTS_DIR, "live_targets.txt")
     
-    # 1. RECON
-    run_cmd_spinner(f"gau {domain_clean} --threads 10 >> {raw_path} 2>&1", "GAU (Fetching historical URLs)")
-    # Katana boosted with -jc to parse JavaScript for hidden endpoints, depth 3
-    run_cmd_spinner(f"katana -u {domain_full} -d 3 -jc -silent >> {raw_path}", "Katana (Crawling active links)")
+    # Resolving absolute paths for Recon tools (THE BUG FIX)
+    gau_bin = resolve_binary_path("gau") or "gau"
+    katana_bin = resolve_binary_path("katana") or "katana"
     
-    # Force defaults for demo testfire to guarantee tests run if the target is testfire
-    if "testfire" in domain:
-        with open(raw_path, "a", encoding="utf-8") as f:
-            f.write(f"\nhttp://{domain_clean}/search.jsp?query=test\n")
-            f.write(f"http://{domain_clean}/login.jsp\n")
-
+    # 1. RECON (Now using full paths)
+    run_cmd_spinner(f"{gau_bin} {domain_clean} --threads 10 >> {raw_path} 2>&1", "GAU (Fetching historical URLs)")
+    run_cmd_spinner(f"{katana_bin} -u {domain_full} -d 3 -jc -silent >> {raw_path}", "Katana (Crawling active links)")
+    
     # 2. FILTERING (TAKE ALL PARAMETERS)
     found_urls = []
     if os.path.exists(raw_path):
@@ -227,7 +222,6 @@ def run_pipeline(domain):
         cmd_b = f"{nuclei_bin} -l {live_path} -tags dast,xss,sqli,lfi,injection -json -o {nuclei_out_b}"
         run_cmd_spinner(cmd_b, "Nuclei (Fuzzing parameters for SQLi/LFI/XSS)")
 
-        # Parse Nuclei Output
         for out_file in [nuclei_out_a, nuclei_out_b]:
             if os.path.exists(out_file):
                 try:
@@ -242,7 +236,7 @@ def run_pipeline(domain):
                                 print(f"\n\033[91m[VULN] Nuclei XSS ({severity}): {name}\033[0m")
                                 print(f"       URL: {matched}")
                             else:
-                                color = "\033[96m" # Cyan (Info)
+                                color = "\033[96m" 
                                 if severity == "CRITICAL": color = "\033[91m"
                                 elif severity == "HIGH": color = "\033[93m"
                                 elif severity == "MEDIUM": color = "\033[95m"
