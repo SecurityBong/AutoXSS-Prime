@@ -64,7 +64,6 @@ def resolve_binary_path(tool_name):
     return None
 
 def run_cmd_spinner(cmd, task_name, timeout=3600):
-    """Runs a command and displays a spinner with an incremental timer."""
     stop_spinner = threading.Event()
     def spinner():
         chars = "|/-\\"
@@ -90,6 +89,22 @@ def run_cmd_spinner(cmd, task_name, timeout=3600):
         t.join()
         sys.stdout.write("\r" + " "*100 + "\r")
         return False
+
+# --- WORKSPACE WIPER (THE BUG FIX) ---
+def clean_workspace():
+    """Wipes old results to prevent cross-contamination between targets."""
+    if not os.path.exists(RESULTS_DIR):
+        return
+        
+    old_files = ["raw_urls.txt", "live_targets.txt", "dalfox.txt", "nuclei_general.json", "nuclei_dast.json", "temp_to_check.txt", "temp_alive.txt"]
+    for file in old_files:
+        filepath = os.path.join(RESULTS_DIR, file)
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            
+    jaeles_out = os.path.join(RESULTS_DIR, "jaeles_out")
+    if os.path.exists(jaeles_out):
+        shutil.rmtree(jaeles_out)
 
 # --- LIVE CHECKER (HTTPX INTEGRATION) ---
 def check_alive(urls):
@@ -160,6 +175,9 @@ def setup():
 # --- EXECUTION PHASE ---
 
 def run_pipeline(domain):
+    # CRITICAL FIX: Wipe old data before doing anything!
+    clean_workspace()
+    
     log(f"Starting Recon on: {domain}", "INFO")
     
     if domain.startswith("http"):
@@ -172,7 +190,6 @@ def run_pipeline(domain):
     raw_path = os.path.join(RESULTS_DIR, "raw_urls.txt")
     live_path = os.path.join(RESULTS_DIR, "live_targets.txt")
     
-    # Resolving absolute paths for Recon tools
     gau_bin = resolve_binary_path("gau") or "gau"
     katana_bin = resolve_binary_path("katana") or "katana"
     
@@ -209,12 +226,11 @@ def run_pipeline(domain):
 
     VULN_COUNT = 0
 
-    # 4. NUCLEI (TECH DETECT & UNSUPPRESSED)
+    # 4. NUCLEI 
     nuclei_bin = resolve_binary_path("nuclei")
     if nuclei_bin:
         log("Phase 1: Nuclei Domain-Level & Tech Scan", "INFO")
         nuclei_out_a = os.path.join(RESULTS_DIR, "nuclei_general.json")
-        # ADDED 'tech' and 'recon' to the tags to fingerprint the stack
         cmd_a = f"{nuclei_bin} -u {domain_full} -tags cve,misconfig,exposure,vulnerability,tech,recon -json -o {nuclei_out_a}"
         run_cmd_spinner(cmd_a, "Nuclei (Fingerprinting tech & hunting CVEs)")
         
@@ -237,7 +253,7 @@ def run_pipeline(domain):
                                 print(f"\n\033[91m[VULN] Nuclei XSS ({severity}): {name}\033[0m")
                                 print(f"       URL: {matched}")
                             else:
-                                color = "\033[96m" # Cyan defaults for INFO
+                                color = "\033[96m" 
                                 if severity == "CRITICAL": color = "\033[91m"
                                 elif severity == "HIGH": color = "\033[93m"
                                 elif severity == "MEDIUM": color = "\033[95m"
