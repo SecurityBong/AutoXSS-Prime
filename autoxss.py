@@ -78,12 +78,18 @@ def run_cmd_spinner(cmd, task_name, timeout=3600):
     t = threading.Thread(target=spinner)
     t.start()
     try:
+        # Check=True will raise an exception if the command fails
         subprocess.run(cmd, shell=True, check=True, timeout=timeout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         stop_spinner.set()
         t.join()
         sys.stdout.write("\r" + " "*100 + "\r") 
         return True
-    except:
+    except subprocess.CalledProcessError:
+        stop_spinner.set()
+        t.join()
+        sys.stdout.write("\r" + " "*100 + "\r")
+        return False
+    except Exception:
         stop_spinner.set()
         t.join()
         sys.stdout.write("\r" + " "*100 + "\r")
@@ -149,30 +155,53 @@ def setup():
         "httpx": "github.com/projectdiscovery/httpx/cmd/httpx@latest"
     }
     
+    # Check if Golang is installed before attempting any installations
+    go_installed = shutil.which("go") is not None
+
     for name, path in tools.items():
         if resolve_binary_path(name):
             log(f"Tool '{name}' Found.", "SUCCESS")
         else:
+            if not go_installed:
+                log(f"Cannot install '{name}' because Golang is not installed!", "ERROR")
+                log("Run: sudo apt install golang", "INFO")
+                sys.exit(1)
+                
             log(f"Installing '{name}'...", "SETUP")
             run_cmd_spinner(f"go install {path}", f"Installing {name}")
+            
+            # FIX: Verification Check
+            if not resolve_binary_path(name):
+                log(f"Failed to install '{name}'. Please install manually: go install {path}", "ERROR")
+                sys.exit(1)
 
     if resolve_binary_path("jaeles"):
          log("Tool 'jaeles' Found.", "SUCCESS")
     else:
+         if not go_installed:
+             log("Cannot install 'jaeles' because Golang is not installed!", "ERROR")
+             sys.exit(1)
+             
          log("Installing Jaeles...", "SETUP")
          run_cmd_spinner(f"go install github.com/jaeles-project/jaeles@latest", "Installing Jaeles")
+         
+         # FIX: Verification Check
+         if not resolve_binary_path("jaeles"):
+             log("Failed to install 'jaeles'. Please install manually.", "ERROR")
+             sys.exit(1)
 
     if not os.path.exists(JAELES_SIG_PATH):
         subprocess.run(f"git clone {JAELES_SIG_REPO} {JAELES_SIG_PATH}", shell=True, stderr=subprocess.DEVNULL)
 
-    log("Updating Nuclei Templates...", "SETUP")
-    subprocess.run("nuclei -update-templates", shell=True, stderr=subprocess.DEVNULL)
+    nuclei_bin = resolve_binary_path("nuclei")
+    if nuclei_bin:
+        log("Updating Nuclei Templates...", "SETUP")
+        subprocess.run(f"{nuclei_bin} -update-templates", shell=True, stderr=subprocess.DEVNULL)
 
     print("\033[1m--- [ READY ] ---\033[0m\n")
 
 # --- PARSING ENGINE ---
 def parse_nuclei_results(filepath):
-    """Safely extracts Nuclei findings, including extracted details."""
     count = 0
     if os.path.exists(filepath):
         with open(filepath, "r", encoding="utf-8") as f:
@@ -186,7 +215,6 @@ def parse_nuclei_results(filepath):
                     severity = data.get('info', {}).get('severity', 'info').upper()
                     matched = data.get('matched-at', 'Unknown URL')
                     
-                    # NEW: Pull out the specific details (TLS version, extracted strings, etc.)
                     extracted = data.get('extracted-results', [])
                     matcher_name = data.get('matcher-name', '')
                     
@@ -210,7 +238,6 @@ def parse_nuclei_results(filepath):
                         print(f"       URL: {matched}{details}")
                     count += 1
                 except Exception:
-                    # Fallback if Nuclei wrote plain text
                     print(f"\n\033[96m[BONUS] Nuclei: {line}\033[0m")
                     count += 1
     return count
