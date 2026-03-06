@@ -16,7 +16,6 @@ DESC = "Automated Unauthenticated XSS & Vulnerability Scanner."
 HOME = os.path.expanduser("~")
 WORKSPACE_DIR = os.path.abspath("AutoXSS_Workspace")
 TOOLS_DIR = os.path.join(WORKSPACE_DIR, "tools")
-RESULTS_DIR = os.path.join(WORKSPACE_DIR, "results")
 
 # REPOS & PATHS
 JAELES_REPO = "https://github.com/jaeles-project/jaeles.git"
@@ -78,7 +77,6 @@ def run_cmd_spinner(cmd, task_name, timeout=3600):
     t = threading.Thread(target=spinner)
     t.start()
     try:
-        # Check=True will raise an exception if the command fails
         subprocess.run(cmd, shell=True, check=True, timeout=timeout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         stop_spinner.set()
         t.join()
@@ -95,23 +93,20 @@ def run_cmd_spinner(cmd, task_name, timeout=3600):
         sys.stdout.write("\r" + " "*100 + "\r")
         return False
 
-# --- WORKSPACE WIPER ---
-def clean_workspace():
-    if not os.path.exists(RESULTS_DIR):
-        return
-        
-    old_files = ["raw_urls.txt", "live_targets.txt", "dalfox.txt", "nuclei_general.json", "nuclei_dast.json", "temp_to_check.txt", "temp_alive.txt"]
-    for file in old_files:
-        filepath = os.path.join(RESULTS_DIR, file)
-        if os.path.exists(filepath):
-            os.remove(filepath)
+# --- DYNAMIC TARGET WIPER ---
+def clean_target_workspace(target_dir):
+    """Nukes ONLY the specific target's directory to prevent cross-contamination."""
+    if os.path.exists(target_dir):
+        try:
+            shutil.rmtree(target_dir)
+            time.sleep(0.5) 
+        except Exception:
+            pass
             
-    jaeles_out = os.path.join(RESULTS_DIR, "jaeles_out")
-    if os.path.exists(jaeles_out):
-        shutil.rmtree(jaeles_out)
+    os.makedirs(target_dir, exist_ok=True)
 
 # --- LIVE CHECKER ---
-def check_alive(urls):
+def check_alive(urls, target_dir):
     log(f"Checking {len(urls)} URLs for liveness using httpx...", "INFO")
     alive_urls = []
     
@@ -120,8 +115,8 @@ def check_alive(urls):
         log("httpx not found! Returning raw URLs.", "WARN")
         return urls
 
-    temp_in = os.path.join(RESULTS_DIR, "temp_to_check.txt")
-    temp_out = os.path.join(RESULTS_DIR, "temp_alive.txt")
+    temp_in = os.path.join(target_dir, "temp_to_check.txt")
+    temp_out = os.path.join(target_dir, "temp_alive.txt")
     
     with open(temp_in, "w", encoding="utf-8") as f:
         f.write("\n".join(urls))
@@ -144,8 +139,9 @@ def check_alive(urls):
 def setup():
     print("\n\033[1m--- [ PRE-FLIGHT CHECK ] ---\033[0m")
     
-    for d in [WORKSPACE_DIR, TOOLS_DIR, RESULTS_DIR]:
-        if not os.path.exists(d): os.makedirs(d)
+    # We only create the base tools/workspace folders now. Targets are created dynamically.
+    for d in [WORKSPACE_DIR, TOOLS_DIR]:
+        os.makedirs(d, exist_ok=True)
 
     tools = {
         "gau": "github.com/lc/gau/v2/cmd/gau@latest",
@@ -155,7 +151,6 @@ def setup():
         "httpx": "github.com/projectdiscovery/httpx/cmd/httpx@latest"
     }
     
-    # Check if Golang is installed before attempting any installations
     go_installed = shutil.which("go") is not None
 
     for name, path in tools.items():
@@ -170,7 +165,6 @@ def setup():
             log(f"Installing '{name}'...", "SETUP")
             run_cmd_spinner(f"go install {path}", f"Installing {name}")
             
-            # FIX: Verification Check
             if not resolve_binary_path(name):
                 log(f"Failed to install '{name}'. Please install manually: go install {path}", "ERROR")
                 sys.exit(1)
@@ -185,7 +179,6 @@ def setup():
          log("Installing Jaeles...", "SETUP")
          run_cmd_spinner(f"go install github.com/jaeles-project/jaeles@latest", "Installing Jaeles")
          
-         # FIX: Verification Check
          if not resolve_binary_path("jaeles"):
              log("Failed to install 'jaeles'. Please install manually.", "ERROR")
              sys.exit(1)
@@ -245,8 +238,6 @@ def parse_nuclei_results(filepath):
 # --- EXECUTION PHASE ---
 
 def run_pipeline(target_input):
-    clean_workspace()
-    
     target_input = target_input.strip()
     
     if target_input.startswith("http"):
@@ -256,10 +247,15 @@ def run_pipeline(target_input):
         domain_full = f"https://{target_input}"
         domain_clean = target_input.split("/")[0]
         
+    # --- FIX: DYNAMIC TARGET DIRECTORY ---
+    target_dir = os.path.join(WORKSPACE_DIR, domain_clean)
+    clean_target_workspace(target_dir)
+    
     log(f"Starting Recon on: {domain_full}", "INFO")
+    log(f"Workspace initialized at: {target_dir}", "INFO")
         
-    raw_path = os.path.join(RESULTS_DIR, "raw_urls.txt")
-    live_path = os.path.join(RESULTS_DIR, "live_targets.txt")
+    raw_path = os.path.join(target_dir, "raw_urls.txt")
+    live_path = os.path.join(target_dir, "live_targets.txt")
     
     gau_bin = resolve_binary_path("gau") or "gau"
     katana_bin = resolve_binary_path("katana") or "katana"
@@ -291,7 +287,7 @@ def run_pipeline(target_input):
         log("No parameterized URLs found! Skipping fuzzing, but proceeding to Root Domain Scan.", "WARN")
     else:
         # 3. LIVE CHECK
-        alive_urls = check_alive(unique_urls)
+        alive_urls = check_alive(unique_urls, target_dir)
         alive_urls = alive_urls[:MAX_URLS_SCAN]
         
         with open(live_path, "w", encoding="utf-8") as f:
@@ -305,7 +301,7 @@ def run_pipeline(target_input):
     nuclei_bin = resolve_binary_path("nuclei")
     if nuclei_bin:
         log("Phase 1: Nuclei Domain-Level & Tech Scan", "INFO")
-        nuclei_out_a = os.path.join(RESULTS_DIR, "nuclei_general.json")
+        nuclei_out_a = os.path.join(target_dir, "nuclei_general.json")
         
         cmd_a = f"{nuclei_bin} -u {domain_full} -j -o {nuclei_out_a}"
         run_cmd_spinner(cmd_a, "Nuclei (Scanning all default templates)")
@@ -315,7 +311,7 @@ def run_pipeline(target_input):
         # NUCLEI DAST
         if len(alive_urls) > 0:
             log("Phase 2: Nuclei Parameter-Level Scan", "INFO")
-            nuclei_out_b = os.path.join(RESULTS_DIR, "nuclei_dast.json")
+            nuclei_out_b = os.path.join(target_dir, "nuclei_dast.json")
             cmd_b = f"{nuclei_bin} -l {live_path} -tags dast,xss,sqli,lfi,injection -j -o {nuclei_out_b}"
             run_cmd_spinner(cmd_b, "Nuclei (Fuzzing parameters for SQLi/LFI/XSS)")
 
@@ -325,7 +321,7 @@ def run_pipeline(target_input):
     jaeles_exec = resolve_binary_path("jaeles")
     if jaeles_exec and os.path.exists(JAELES_SIG_PATH) and len(alive_urls) > 0:
         log("Phase 3: Jaeles Signature Scan", "INFO")
-        jaeles_out_dir = os.path.join(RESULTS_DIR, "jaeles_out")
+        jaeles_out_dir = os.path.join(target_dir, "jaeles_out")
         cmd = f"{jaeles_exec} scan -c 50 -U {live_path} -s {JAELES_SIG_PATH} --no-background -O {jaeles_out_dir} --quiet"
         run_cmd_spinner(cmd, "Jaeles (Checking known payload signatures)")
         
@@ -343,7 +339,7 @@ def run_pipeline(target_input):
     dalfox_bin = resolve_binary_path("dalfox")
     if dalfox_bin and len(alive_urls) > 0:
         log("Phase 4: Dalfox Mass XSS Testing", "INFO")
-        dalfox_out = os.path.join(RESULTS_DIR, "dalfox.txt")
+        dalfox_out = os.path.join(target_dir, "dalfox.txt")
         cmd = f"{dalfox_bin} file {live_path} --skip-mining-all --format plain > {dalfox_out}"
         run_cmd_spinner(cmd, "Dalfox (Injecting context-aware XSS payloads)")
         
@@ -368,7 +364,7 @@ def run_pipeline(target_input):
     print("\n" + "="*70)
     if VULN_COUNT > 0:
         log(f"Scan Complete. Found {VULN_COUNT} issues/intel points.", "SUCCESS")
-        log(f"Full reports saved in: {RESULTS_DIR}", "INFO")
+        log(f"Full reports saved in: {target_dir}", "INFO")
     else:
         log("Scan Complete. No vulnerabilities found on target surface.", "INFO")
 
