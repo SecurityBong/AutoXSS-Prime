@@ -23,7 +23,7 @@ import html
 
 # ─── BRANDING ────────────────────────────────────────────────────────────────
 TOOL_NAME  = "AutoXSS Prime"
-VERSION    = "2.0"
+VERSION    = "2.0 (Enhanced)"
 CREATOR    = "Rahul A.K.A SecurityBong"
 DESC       = "Automated XSS / Open-Redirect / CSRF-chain scanner."
 
